@@ -68,9 +68,7 @@ fn compute_associated_frequencies(
 /// 
 /// # Returns:
 /// * `Tx` - Synchrosqueezed STFT
-/// * `Sx` - STFT of input
 /// * `ssq_freqs` - Frequencies for synchrosqueezed transform
-/// * `Sfs` - Frequencies for STFT
 #[pyfunction]
 #[pyo3(signature = (x, window, n_fft=None, win_len=None, hop_len=1, fs=1.0, padtype="reflect", squeezing="sum", gamma=None))]
 pub fn ssq_stft<'py>(
@@ -84,7 +82,7 @@ pub fn ssq_stft<'py>(
     padtype: &str,
     squeezing: &str,
     gamma: Option<f64>,
-) -> PyResult<(PyObject, PyObject, PyObject, PyObject)> {
+) -> PyResult<(PyObject, PyObject)> {
     // Convert Python arrays to Rust arrays
     let x_array = x.as_array().to_owned();
     let window_array = window.as_array().to_owned();
@@ -302,16 +300,14 @@ pub fn ssq_stft<'py>(
             }
         }
         
-        (Tx, Sx, ssq_freqs, Sfs)
+        (Tx, ssq_freqs)
     });
     
     // Convert results back to Python objects
-    let (Tx, Sx, ssq_freqs, Sfs) = result;
+    let (Tx, ssq_freqs) = result;
     
     let py_Tx = Tx.into_pyarray(py).to_object(py);
-    let py_Sx = Sx.into_pyarray(py).to_object(py);
     let py_ssq_freqs = ssq_freqs.into_pyarray(py).to_object(py);
-    let py_Sfs = Sfs.into_pyarray(py).to_object(py);
     
-    Ok((py_Tx, py_Sx, py_ssq_freqs, py_Sfs))
+    Ok((py_Tx, py_ssq_freqs))
 }

@@ -3,12 +3,127 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 import dask.array as da
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ssqueeze import _rs
+
+
+def plot_ssq_stft(
+    ssq_stft_result,
+    fs,
+    hop_length=256,
+    start_time=0,
+    duration=None,
+    channel_idx=0,
+    vmin=None,
+    vmax=None,
+    cmap="viridis",
+):
+    """
+    Plot the synchrosqueezed STFT spectrogram.
+
+    Parameters:
+    -----------
+    ssq_stft_result : dask.Array
+        Synchrosqueezed STFT output from process_stft_ssq()
+    fs : float
+        Sampling frequency
+    n_fft : int, optional
+        FFT size used in processing
+    hop_length : int, optional
+        Hop length used in STFT processing
+    start_time : float, optional
+        Starting time of the segment to plot (in seconds)
+    duration : float, optional
+        Duration of the segment to plot (in seconds).
+        If None, plots the entire spectrogram
+    channel_idx : int, optional
+        Channel index to plot (for multichannel data)
+    vmin : float, optional
+        Minimum value for color scaling
+    vmax : float, optional
+        Maximum value for color scaling
+    cmap : str, optional
+        Colormap to use for the spectrogram
+    """
+    # Compute the result (if it's a Dask array)
+    try:
+        import dask.array as da
+
+        if isinstance(ssq_stft_result, da.Array):
+            ssq_stft_result = ssq_stft_result.compute()
+    except ImportError:
+        pass
+
+    # Extract the channel
+    if ssq_stft_result.ndim == 3:
+        ssq_stft_result = ssq_stft_result[:, :, channel_idx]
+
+    # Compute time per frame
+    time_per_frame = hop_length / fs
+
+    # Compute frequency axis
+    freq_bins = ssq_stft_result.shape[0]
+    freq_axis = np.linspace(0, fs / 2, freq_bins)
+
+    # Determine start and end frames
+    total_frames = ssq_stft_result.shape[1]
+    start_frame = int(start_time / time_per_frame)
+    if duration is None:
+        end_frame = total_frames
+    else:
+        end_frame = min(start_frame + int(duration / time_per_frame), total_frames)
+
+    # Extract spectrogram segment
+    ssq_segment = ssq_stft_result[:, start_frame:end_frame]
+
+    # Compute magnitude in decibels
+    # Add a small epsilon to avoid log(0)
+    eps = 1e-10
+    ssq_db = 20 * np.log10(np.abs(ssq_segment) + eps)
+
+    # Determine color scaling
+    if vmin is None or vmax is None:
+        ssq_finite = ssq_db[np.isfinite(ssq_db)]
+        if len(ssq_finite) > 0:
+            if vmax is None:
+                vmax = np.percentile(ssq_finite, 99)
+            if vmin is None:
+                vmin = vmax - 80  # Show up to 80dB below the max
+
+    # Create the plot
+    plt.figure(figsize=(15, 8))
+
+    # Use symmetric normalization to handle potential large dynamic range
+    norm = colors.SymLogNorm(linthresh=1, linscale=1, vmin=vmin, vmax=vmax)
+
+    plt.imshow(
+        ssq_db,
+        aspect="auto",
+        origin="lower",
+        cmap=cmap,
+        norm=norm,
+        extent=[
+            start_frame * time_per_frame,
+            end_frame * time_per_frame,
+            freq_axis[0],
+            freq_axis[-1],
+        ],
+    )
+
+    plt.colorbar(label="Magnitude (dB)")
+
+    plt.title(f"Synchrosqueezed STFT - Channel {channel_idx + 1}")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Frequency (Hz)")
+
+    plt.tight_layout()
+    plt.show()
 
 
 # Create a test function to verify the Rust module
@@ -26,7 +141,7 @@ def test_rust_ssq_stft():
     # Call the Rust Synchrosqueezed STFT function
     try:
         print("Calling Rust SSQ_STFT function...")
-        Tx, Sx, ssq_freqs, Sfs = _rs.ssq_stft(
+        Tx, ssq_freqs = _rs.ssq_stft(
             x,
             window=window,
             n_fft=n_fft,
@@ -37,9 +152,7 @@ def test_rust_ssq_stft():
         )
 
         print(f"Synchrosqueezed STFT result shape: {Tx.shape}")
-        print(f"Original STFT result shape: {Sx.shape}")
         print(f"SSQ frequencies shape: {ssq_freqs.shape}")
-        print(f"STFT frequencies shape: {Sfs.shape}")
         print("SSQ_STFT test successful!")
         return True
     except Exception as e:
@@ -47,18 +160,15 @@ def test_rust_ssq_stft():
         return False
 
 
-# The process function that uses Dask with Synchrosqueezing
-def process_ssq_stft(
+def process_stft_ssq(
     data: da.Array,
     fs: float = None,
     n_fft: int = 1024,
     hop_length: int = 256,
     window_name: str = "hann",
     squeezing: str = "sum",
-    gamma: float = None,
-    return_original: bool = False,  # Option to return original STFT alongside SSQ
     **kwargs,
-) -> dict:
+) -> da.Array:
     """
     Process data with Rust-based Synchrosqueezed STFT implementation
 
@@ -74,21 +184,13 @@ def process_ssq_stft(
         Hop length between consecutive frames
     window_name : str
         Window function name
-    squeezing : str
+    squeezing : str, optional
         Synchrosqueezing method ('sum' or 'lebesgue')
-    gamma : float
-        Phase threshold for synchrosqueezing
-    return_original : bool
-        Whether to return the original STFT alongside the synchrosqueezed version
 
     Returns:
     --------
-    dict
-        Dictionary containing:
-        - 'ssq': Synchrosqueezed spectrogram with shape (freq_bins, time_frames, channels)
-        - 'stft': Original STFT with shape (freq_bins, time_frames, channels) if return_original=True
-        - 'ssq_freqs': Frequencies for synchrosqueezed transform
-        - 'stft_freqs': Frequencies for STFT
+    da.Array
+        Synchrosqueezed spectrogram with shape (freq_bins, time_frames, channels)
     """
     if fs is None:
         raise ValueError("Sampling frequency (fs) must be provided")
@@ -122,10 +224,8 @@ def process_ssq_stft(
             x = x.reshape(-1, 1)
 
         n_channels = x.shape[1]
-        ssq_results = []
-        stft_results = []
-        ssq_freqs_all = None
-        stft_freqs_all = None
+        results = []
+        results_freqs = []
 
         for ch in range(n_channels):
             # Extract channel data and ensure it's the right type
@@ -134,74 +234,49 @@ def process_ssq_stft(
             # Make sure window is the right type too
             window_array = np.asarray(window, dtype=np.float64)
 
-            # Call Rust SSQ_STFT function
+            # Call Rust Synchrosqueezed STFT function
             try:
-                Tx, Sx, ssq_freqs, Sfs = _rs.ssq_stft(
+                ssq_stft_result, ssq_freqs = _rs.ssq_stft(
                     channel_data,
-                    window=window_array,
+                    window_array,
                     n_fft=n_fft,
+                    win_len=n_fft,
                     hop_len=hop_length,
                     fs=fs,
                     padtype="reflect",
                     squeezing=squeezing,
-                    gamma=gamma,
                 )
-                # Store frequencies from the first channel
-                if ch == 0:
-                    ssq_freqs_all = ssq_freqs
-                    stft_freqs_all = Sfs
-
                 # Add to results
-                ssq_results.append(Tx)
-                if return_original:
-                    stft_results.append(Sx)
+                results.append(ssq_stft_result)
+                results_freqs.append(ssq_freqs)
             except Exception as e:
                 print(f"Error processing channel {ch}: {e}")
                 # Return zeros with expected shape if processing fails
                 n_frames = ((x.shape[0] - n_fft) // hop_length) + 1
                 n_freqs = n_fft // 2 + 1
-                ssq_results.append(np.zeros((n_freqs, n_frames), dtype=np.complex128))
-                if return_original:
-                    stft_results.append(
-                        np.zeros((n_freqs, n_frames), dtype=np.complex128)
-                    )
+                results.append(np.zeros((n_freqs, n_frames), dtype=np.complex128))
+                results_freqs.append(np.linspace(0, fs / 2, n_freqs, dtype=np.float64))
+
+        # Ensure consistent frequency grid
+        frequencies = results_freqs[0]  # All channels should have same freq grid
 
         # Stack results, shape: (channels, freq_bins, time_frames)
-        result_dict = {}
-
-        if ssq_results:
-            stacked_ssq = np.stack(ssq_results)
+        if results:
+            stacked = np.stack(results)
             # Rearrange to (freq_bins, time_frames, channels)
-            result_dict["ssq"] = np.transpose(stacked_ssq, (1, 2, 0))
-            result_dict["ssq_freqs"] = ssq_freqs_all
-
-            if return_original and stft_results:
-                stacked_stft = np.stack(stft_results)
-                result_dict["stft"] = np.transpose(stacked_stft, (1, 2, 0))
-                result_dict["stft_freqs"] = stft_freqs_all
+            return np.transpose(stacked, (1, 2, 0))
         else:
             # In case all channels failed
             n_frames = ((x.shape[0] - n_fft) // hop_length) + 1
             n_freqs = n_fft // 2 + 1
-            result_dict["ssq"] = np.zeros(
-                (n_freqs, n_frames, n_channels), dtype=np.complex128
-            )
-            result_dict["ssq_freqs"] = np.linspace(0, fs / 2, n_freqs)
-
-            if return_original:
-                result_dict["stft"] = np.zeros(
-                    (n_freqs, n_frames, n_channels), dtype=np.complex128
-                )
-                result_dict["stft_freqs"] = np.linspace(0, fs / 2, n_freqs)
-
-        return result_dict
+            return np.zeros((n_freqs, n_frames, n_channels), dtype=np.complex128)
 
     # Use map_overlap with adjusted parameters
     result = data.map_overlap(
         process_chunk,
         depth={-2: overlap_samples},  # Using dict form like STFT
         boundary="reflect",
-        dtype=np.float32,  # Return dictionary
+        dtype=np.complex128,
         new_axis=-3,  # Add frequency bin dimension
     )
 
@@ -227,94 +302,19 @@ with pa.memory_map(str(parquet_path), "r") as mmap:
     data_ = da.from_array(data_array, chunks=(1000000, -1))
 # %%
 # Process with synchrosqueezed STFT
-result = process_ssq_stft(
+result = process_stft_ssq(
     data_,
     fs=fs,
     n_fft=1024,
     hop_length=256,
     window_name="hann",
     squeezing="sum",
-    return_original=True,
 )
 # %%
-result.compute()
+a = result.compute()
+
+
 # %%
-# Plot the results
-import matplotlib.pyplot as plt
-
-# Compute a small chunk for visualization
-segment_duration = 5  # seconds
-hop_length = 256
-time_per_frame = hop_length / fs
-frames_per_segment = int(segment_duration / time_per_frame)
-
-# Take a slice of the data
-start_frame = 0
-end_frame = start_frame + frames_per_segment
-
-# Compute just this slice
-sample_result = result.compute()
-
-# Extract the results
-ssq_spectrogram = sample_result["ssq"][:, start_frame:end_frame, 0]
-stft_spectrogram = sample_result["stft"][:, start_frame:end_frame, 0]
-ssq_freqs = sample_result["ssq_freqs"]
-stft_freqs = sample_result["stft_freqs"]
-
-# Create a figure with two subplots
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-
-# Plot the original STFT
-stft_db = 20 * np.log10(np.abs(stft_spectrogram) + 1e-10)
-vmax_stft = np.max(stft_db)
-vmin_stft = vmax_stft - 80
-
-im1 = ax1.imshow(
-    stft_db,
-    aspect="auto",
-    origin="lower",
-    cmap="viridis",
-    vmin=vmin_stft,
-    vmax=vmax_stft,
-)
-ax1.set_title("Standard STFT Spectrogram")
-ax1.set_ylabel("Frequency Bin")
-fig.colorbar(im1, ax=ax1, label="Magnitude (dB)")
-
-# Plot the synchrosqueezed STFT
-ssq_db = 20 * np.log10(np.abs(ssq_spectrogram) + 1e-10)
-vmax_ssq = np.max(ssq_db)
-vmin_ssq = vmax_ssq - 80
-
-im2 = ax2.imshow(
-    ssq_db,
-    aspect="auto",
-    origin="lower",
-    cmap="viridis",
-    vmin=vmin_ssq,
-    vmax=vmax_ssq,
-)
-ax2.set_title("Synchrosqueezed STFT Spectrogram")
-ax2.set_xlabel("Time Frame")
-ax2.set_ylabel("Frequency Bin")
-fig.colorbar(im2, ax=ax2, label="Magnitude (dB)")
-
-# Add frequency labels
-for ax, freqs in [(ax1, stft_freqs), (ax2, ssq_freqs)]:
-    yticks = np.linspace(0, len(freqs) - 1, 10, dtype=int)
-    yticklabels = [f"{freqs[i] / 1000:.1f}" for i in yticks]  # Show in kHz
-    ax.set_yticks(yticks)
-    ax.set_yticklabels(yticklabels)
-
-# Add time labels
-for ax in [ax1, ax2]:
-    segment_times = np.linspace(0, segment_duration, end_frame - start_frame)
-    xticks = np.linspace(0, end_frame - start_frame - 1, 6, dtype=int)
-    xticklabels = [f"{segment_times[i]:.1f}s" for i in xticks]
-    ax.set_xticks(xticks)
-    ax.set_xticklabels(xticklabels)
-
-plt.tight_layout()
-plt.show()
+plot_ssq_stft(result, fs=fs, hop_length=256, duration=1)
 
 # %%

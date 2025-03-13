@@ -37,7 +37,7 @@ def ssq_stft(
     padtype: str = "reflect",
     squeezing: str = "sum",
     gamma: Optional[float] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute the Synchrosqueezed Short-Time Fourier Transform using Rust.
 
@@ -55,8 +55,6 @@ def ssq_stft(
     Returns:
         Tuple containing:
         - Synchrosqueezed STFT (complex-valued 2D array, shape: [n_freqs, n_frames])
-        - Original STFT (complex-valued 2D array, shape: [n_freqs, n_frames])
         - Synchrosqueezed frequency bins (1D array)
-        - Original STFT frequency bins (1D array)
     """
     ...

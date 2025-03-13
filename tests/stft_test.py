@@ -3,12 +3,132 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 import dask.array as da
+import matplotlib.colors as colors
+import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ssqueeze import _rs
+
+
+def plot_stft_spectrogram(
+    result,
+    fs,
+    hop_length=256,
+    start_time=0,
+    duration=None,
+    channel_idx=0,
+    vmin=None,
+    vmax=None,
+    cmap="viridis",
+):
+    """
+    Plot the STFT spectrogram with advanced visualization features.
+
+    Parameters:
+    -----------
+    result : dask.Array or numpy.ndarray
+        STFT output with shape (freq_bins, time_frames, channels)
+    fs : float
+        Sampling frequency in Hz
+    hop_length : int, optional
+        Hop length between STFT frames (default: 256)
+    start_time : float, optional
+        Starting time of the segment to plot (in seconds, default: 0)
+    duration : float, optional
+        Duration of the segment to plot (in seconds).
+        If None, plots the entire spectrogram
+    channel_idx : int, optional
+        Channel index to plot (default: 0)
+    vmin : float, optional
+        Minimum value for color scaling
+    vmax : float, optional
+        Maximum value for color scaling
+    cmap : str, optional
+        Colormap to use for the spectrogram (default: 'viridis')
+
+    Returns:
+    --------
+    None
+        Displays the spectrogram plot
+    """
+    # Compute the result if it's a Dask array
+    try:
+        import dask.array as da
+
+        if isinstance(result, da.Array):
+            result = result.compute()
+    except ImportError:
+        pass
+
+    # Extract the channel
+    if result.ndim == 3:
+        result = result[:, :, channel_idx]
+
+    # Compute time per frame
+    time_per_frame = hop_length / fs
+
+    # Determine start and end frames
+    total_frames = result.shape[1]
+    start_frame = int(start_time / time_per_frame)
+    if duration is None:
+        end_frame = total_frames
+    else:
+        end_frame = min(start_frame + int(duration / time_per_frame), total_frames)
+
+    # Extract spectrogram segment
+    spectrogram = result[:, start_frame:end_frame]
+
+    # Check if the spectrogram has valid data
+    if spectrogram.size == 0 or np.max(np.abs(spectrogram)) < 1e-10:
+        print("Warning: Spectrogram data is empty or contains only zeros.")
+        # Create a dummy spectrogram for plotting
+        spec_db = np.zeros((spectrogram.shape[0], spectrogram.shape[1]))
+        vmin, vmax = -80, 0
+    else:
+        # Plot the magnitude spectrogram in decibels
+        spec_db = 20 * np.log10(np.abs(spectrogram) + 1e-10)
+
+        # Set vmin and vmax with a safety check
+        if vmax is None:
+            vmax = np.max(spec_db)
+        if vmin is None:
+            vmin = vmax - 80  # Show up to 80dB below the max
+
+    # Create the plot
+    plt.figure(figsize=(15, 8))
+    plt.imshow(
+        spec_db,
+        aspect="auto",
+        origin="lower",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        extent=[start_frame * time_per_frame, end_frame * time_per_frame, 0, fs / 2],
+    )
+
+    plt.colorbar(label="Magnitude (dB)")
+    plt.title(
+        f"STFT Spectrogram - Channel {channel_idx + 1} "
+        f"(segment {start_frame}-{end_frame})"
+    )
+    plt.xlabel("Time (s)")
+    plt.ylabel("Frequency (Hz)")
+
+    # Add frequency labels
+    freq_max = fs / 2  # Nyquist frequency
+    yticks = np.linspace(0, freq_max, 10)
+    plt.yticks(yticks, [f"{freq:.1f}" for freq in yticks])
+
+    # Add time labels relative to the segment
+    if end_frame > start_frame:
+        segment_times = np.linspace(0, (end_frame - start_frame) * time_per_frame, 6)
+        plt.xticks(segment_times, [f"{t:.1f}s" for t in segment_times])
+
+    plt.tight_layout()
+    plt.show()
 
 
 # Create a test function to verify the Rust module
@@ -151,6 +271,97 @@ def process_stft(
     return result
 
 
+def plot_stft_magnitude(
+    ssq_stft_result,
+    fs,
+    hop_length=256,
+    start_time=0,
+    duration=None,
+    channel_idx=0,
+    vmin=None,
+    vmax=None,
+    cmap="viridis",
+):
+    """
+    Plot the magnitude of the STFT spectrogram.
+
+    Parameters are the same as plot_ssq_stft.
+    """
+    # Compute the result (if it's a Dask array)
+    try:
+        import dask.array as da
+
+        if isinstance(ssq_stft_result, da.Array):
+            ssq_stft_result = ssq_stft_result.compute()
+    except ImportError:
+        pass
+
+    # Extract the channel
+    if ssq_stft_result.ndim == 3:
+        ssq_stft_result = ssq_stft_result[:, :, channel_idx]
+
+    # Compute time per frame
+    time_per_frame = hop_length / fs
+
+    # Compute frequency axis
+    freq_bins = ssq_stft_result.shape[0]
+    freq_axis = np.linspace(0, fs / 2, freq_bins)
+
+    # Determine start and end frames
+    total_frames = ssq_stft_result.shape[1]
+    start_frame = int(start_time / time_per_frame)
+    if duration is None:
+        end_frame = total_frames
+    else:
+        end_frame = min(start_frame + int(duration / time_per_frame), total_frames)
+
+    # Extract spectrogram segment
+    stft_segment = ssq_stft_result[:, start_frame:end_frame]
+
+    # Compute magnitude in decibels
+    # Add a small epsilon to avoid log(0)
+    eps = 1e-10
+    stft_db = 20 * np.log10(np.abs(stft_segment) + eps)
+
+    # Determine color scaling
+    if vmin is None or vmax is None:
+        stft_finite = stft_db[np.isfinite(stft_db)]
+        if len(stft_finite) > 0:
+            if vmax is None:
+                vmax = np.percentile(stft_finite, 99)
+            if vmin is None:
+                vmin = vmax - 80  # Show up to 80dB below the max
+
+    # Create the plot
+    plt.figure(figsize=(15, 8))
+
+    # Use symmetric normalization to handle potential large dynamic range
+    norm = colors.SymLogNorm(linthresh=1, linscale=1, vmin=vmin, vmax=vmax)
+
+    plt.imshow(
+        stft_db,
+        aspect="auto",
+        origin="lower",
+        cmap=cmap,
+        norm=norm,
+        extent=[
+            start_frame * time_per_frame,
+            end_frame * time_per_frame,
+            freq_axis[0],
+            freq_axis[-1],
+        ],
+    )
+
+    plt.colorbar(label="Magnitude (dB)")
+
+    plt.title(f"STFT Magnitude - Channel {channel_idx + 1}")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Frequency (Hz)")
+
+    plt.tight_layout()
+    plt.show()
+
+
 # %%
 path_home = Path(r"E:\jpenalozaa")
 path_base = path_home.joinpath(
@@ -171,67 +382,5 @@ result = process_stft(data_, fs=fs, n_fft=1024, hop_length=256, window_name="han
 
 
 # %%
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Assuming 'result' is your STFT output with shape (513, 28616, 2)
-
-# Select a segment of the data (e.g., 5 seconds worth of frames)
-hop_length = 256
-time_per_frame = hop_length / fs
-
-# Let's try a different segment - starting from the beginning
-segment_duration = 5  # seconds
-frames_per_segment = int(segment_duration / time_per_frame)
-start_frame = 0  # Start at the beginning of the data
-end_frame = start_frame + frames_per_segment
-
-# Make sure end_frame doesn't exceed the data size
-end_frame = min(end_frame, result.shape[1])
-
-# Extract and compute the data for the first channel
-channel_idx = 0
-spectrogram = result[:, start_frame:end_frame, channel_idx].compute()
-
-# Check if the spectrogram has valid data
-if spectrogram.size == 0 or np.max(np.abs(spectrogram)) < 1e-10:
-    print("Warning: Spectrogram data is empty or contains only zeros.")
-    # Create a dummy spectrogram for plotting
-    spec_db = np.zeros((513, frames_per_segment))
-    vmin, vmax = -80, 0
-else:
-    # Plot the magnitude spectrogram in decibels
-    spec_db = 20 * np.log10(np.abs(spectrogram) + 1e-10)
-    # Set vmin and vmax with a safety check
-    vmax = np.max(spec_db)
-    vmin = vmax - 80  # Show up to 80dB below the max
-
-# Create the plot
-plt.figure(figsize=(12, 6))
-plt.imshow(spec_db, aspect="auto", origin="lower", cmap="viridis", vmin=vmin, vmax=vmax)
-
-plt.colorbar(label="Magnitude (dB)")
-plt.title(
-    f"STFT Spectrogram - Channel {channel_idx + 1} (segment {start_frame}-{end_frame})"
-)
-plt.xlabel("Time Frame")
-plt.ylabel("Frequency Bin")
-
-# Add frequency labels
-freq_max = fs / 2  # Nyquist frequency
-yticks = np.linspace(0, spectrogram.shape[0] - 1, 10, dtype=int)
-yticklabels = [f"{freq:.1f}" for freq in np.linspace(0, freq_max, 10)]
-plt.yticks(yticks, yticklabels)
-
-# Add time labels relative to the segment
-if end_frame > start_frame:
-    segment_times = np.linspace(
-        0, (end_frame - start_frame) * time_per_frame, spectrogram.shape[1]
-    )
-    xticks = np.linspace(0, spectrogram.shape[1] - 1, 6, dtype=int)
-    xticklabels = [f"{segment_times[i]:.1f}s" for i in xticks]
-    plt.xticks(xticks, xticklabels)
-
-plt.tight_layout()
-plt.show()
+plot_stft_spectrogram(result, fs=fs, hop_length=256, channel_idx=1, duration=1)
 # %%
