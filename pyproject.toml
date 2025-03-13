@@ -7,7 +7,15 @@ authors = [
     { name = "Jesús Peñaloza", email = "jesus.penalozaa@ufl.edu" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "dask[complete]>=2025.2.0",
+    "matplotlib>=3.10.1",
+    "pyarrow>=19.0.1",
+    "seaborn>=0.13.2",
+    "numba>=0.61.0",
+    "scipy>=1.15.2",
+    "polars>=1.24.0",
+]
 
 [project.scripts]
 ssqueeze = "ssqueeze:main"
