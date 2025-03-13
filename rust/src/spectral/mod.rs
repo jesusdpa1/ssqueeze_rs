@@ -1,3 +1,3 @@
 pub mod stft;
 pub mod stft_utils;
-pub mod stft_ssq;
+pub mod ssq_stft;

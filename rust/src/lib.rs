@@ -6,7 +6,7 @@ mod utils;
 
 // Re-export the STFT functions from the spectral module
 use spectral::stft::stft;
-use spectral::stft_ssq::ssq_stft;
+use spectral::ssq_stft::ssq_stft;
 
 #[pyfunction]
 fn hello_from_bin() -> String {
