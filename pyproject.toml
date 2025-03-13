@@ -1,0 +1,32 @@
+[project]
+name = "ssqueeze"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jesús Peñaloza", email = "jesus.penalozaa@ufl.edu" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+ssqueeze = "ssqueeze:main"
+
+[tool.maturin]
+module-name = "ssqueeze._rs"
+python-packages = ["ssqueeze"]
+python-source = "src"
+manifest-path = "./rust/Cargo.toml"
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5",
+    "ruff>=0.10.0",
+]
+
+[tool.uv]
+cache-keys = [{file = "pyproject.toml"}, {file = "rust/Cargo.toml"}, {file = "**/*.rs"}]
