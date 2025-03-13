@@ -1,11 +1,11 @@
 // rust/src/spectral/stft_ssq.rs
 use ndarray::{Array1, Array2, ArrayView1, s};
 use num_complex::Complex64;
-use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyReadonlyArray1};
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 use rayon::prelude::*;
-use crate::spectral::stft_utils::{apply_window, pad_reflect, pad_zeros, stft_derivative, compute_stft};
+use crate::spectral::stft_utils::{apply_window, pad_reflect, pad_zeros, compute_stft, stft_derivative};
 
 /// Phase transform for STFT
 fn phase_stft(
@@ -42,13 +42,12 @@ fn phase_stft(
 fn compute_associated_frequencies(
     n_freqs: usize,
     fs: f64,
-    dtype: &str,
 ) -> Array1<f64> {
     let mut ssq_freqs = Array1::<f64>::zeros(n_freqs);
     
     // Linear distribution from 0 to fs/2
     for i in 0..n_freqs {
-        ssq_freqs[i] = (i as f64) * 0.5 * fs / (n_freqs as f64 - 1.0);
+        ssq_freqs[i] = (i as f64) * 0.5 * fs / ((n_freqs as f64) - 1.0);
     }
     
     ssq_freqs
@@ -87,8 +86,8 @@ pub fn ssq_stft<'py>(
     gamma: Option<f64>,
 ) -> PyResult<(PyObject, PyObject, PyObject, PyObject)> {
     // Convert Python arrays to Rust arrays
-    let x_array = x.as_array();
-    let window_array = window.as_array();
+    let x_array = x.as_array().to_owned();
+    let window_array = window.as_array().to_owned();
     
     // Process arguments
     let n = x_array.len();
@@ -102,51 +101,182 @@ pub fn ssq_stft<'py>(
             win_len, n_fft
         )));
     }
+
+    // Ensure window size matches n_fft by padding if needed
+    let window_sized = if window_array.len() < n_fft {
+        let pad_left = (n_fft - window_array.len()) / 2;
+        let pad_right = n_fft - window_array.len() - pad_left;
+        
+        let mut padded_window = Array1::<f64>::zeros(n_fft);
+        for i in 0..window_array.len() {
+            padded_window[i + pad_left] = window_array[i];
+        }
+        padded_window
+    } else if window_array.len() > n_fft {
+        let start = (window_array.len() - n_fft) / 2;
+        let window_view = window_array.slice(s![start..start+n_fft]);
+        window_view.to_owned()
+    } else {
+        window_array
+    };
     
     // Allow Python threads to run during computation
     let result = Python::allow_threads(py, || {
-        // Create diff window
-        let diff_window = compute_diff_window(&window_array);
-        
-        // Pad the signal
+        // Pad the signal using the stft_utils functions
         let padded_x = match padtype {
-            "reflect" => pad_reflect(&x_array, n_fft),
-            "zero" => pad_zeros(&x_array, n_fft),
-            _ => pad_reflect(&x_array, n_fft), // Default to reflect
+            "reflect" => pad_reflect(&x_array.view(), n_fft),
+            "zero" => pad_zeros(&x_array.view(), n_fft),
+            _ => pad_reflect(&x_array.view(), n_fft), // Default to reflect
         };
         
-        // Compute STFT and its derivative
-        let Sx = compute_stft(&padded_x, n_fft, hop_len, &window_array);
-        let dSx = stft_derivative(&padded_x, n_fft, hop_len, &window_array, &diff_window, fs);
+        // Compute the window derivative for STFT derivative calculation
+        let diff_window = {
+            use rustfft::{FftPlanner, num_complex::Complex as FFTComplex};
+            let n = n_fft;
+            let mut diff_window = Array1::<f64>::zeros(n);
+            
+            // Create frequency domain representation
+            let mut freqs = Array1::<f64>::zeros(n);
+            for i in 0..n/2 + 1 {
+                freqs[i] = i as f64;
+            }
+            for i in n/2 + 1..n {
+                freqs[i] = (i as f64) - (n as f64);
+            }
+            
+            // Scale by 2*pi/N
+            for i in 0..n {
+                freqs[i] *= 2.0 * std::f64::consts::PI / (n as f64);
+            }
+            
+            // FFT the window
+            let mut planner = FftPlanner::new();
+            let fft_forward = planner.plan_fft_forward(n);
+            let fft_inverse = planner.plan_fft_inverse(n);
+            
+            let mut window_complex: Vec<FFTComplex<f64>> = window_sized
+                .iter()
+                .map(|&w| FFTComplex::new(w, 0.0))
+                .collect();
+            
+            fft_forward.process(&mut window_complex);
+            
+            // Multiply by i*omega
+            for i in 0..n {
+                let re = window_complex[i].re;
+                let im = window_complex[i].im;
+                window_complex[i] = FFTComplex::new(-im * freqs[i], re * freqs[i]);
+            }
+            
+            // Inverse FFT
+            fft_inverse.process(&mut window_complex);
+            
+            // Normalize
+            let scale = 1.0 / (n as f64);
+            for i in 0..n {
+                diff_window[i] = window_complex[i].re * scale;
+            }
+            
+            diff_window
+        };
+
+        // Calculate frames
+        let n_samples = padded_x.len();
+        let n_frames = ((n_samples - n_fft) / hop_len) + 1;
+        let n_freqs = n_fft / 2 + 1;
+        
+        // Compute STFT
+        let mut Sx = Array2::<Complex64>::zeros((n_freqs, n_frames));
+        let mut dSx = Array2::<Complex64>::zeros((n_freqs, n_frames));
+        
+        // Process frames
+        let frame_results: Vec<_> = (0..n_frames)
+            .into_par_iter()
+            .map(|frame| {
+                let start = frame * hop_len;
+                let frame_slice = padded_x.slice(s![start..start + n_fft]);
+                
+                // Create a planner for this thread
+                let mut planner = rustfft::FftPlanner::new();
+                let fft = planner.plan_fft_forward(n_fft);
+                
+                // Apply window for STFT
+                let windowed_frame = apply_window(&frame_slice, &window_sized.view());
+                
+                // Apply diff_window for STFT derivative
+                let diff_windowed_frame = {
+                    let mut frame_complex = Array1::<Complex64>::zeros(n_fft);
+                    for i in 0..n_fft {
+                        frame_complex[i] = Complex64::new(frame_slice[i] * diff_window[i] * fs, 0.0);
+                    }
+                    frame_complex
+                };
+                
+                // Convert to FFT Complex format for STFT
+                let mut stft_input: Vec<rustfft::num_complex::Complex<f64>> = windowed_frame
+                    .iter()
+                    .map(|&c| rustfft::num_complex::Complex::new(c.re, c.im))
+                    .collect();
+                
+                // Convert to FFT Complex format for derivative
+                let mut dstft_input: Vec<rustfft::num_complex::Complex<f64>> = diff_windowed_frame
+                    .iter()
+                    .map(|&c| rustfft::num_complex::Complex::new(c.re, c.im))
+                    .collect();
+                
+                // Perform FFTs
+                fft.process(&mut stft_input);
+                fft.process(&mut dstft_input);
+                
+                // Extract the positive frequencies (DC to Nyquist)
+                let stft_output: Vec<Complex64> = stft_input
+                    .iter()
+                    .take(n_freqs)
+                    .map(|&c| Complex64::new(c.re, c.im))
+                    .collect();
+                
+                let dstft_output: Vec<Complex64> = dstft_input
+                    .iter()
+                    .take(n_freqs)
+                    .map(|&c| Complex64::new(c.re, c.im))
+                    .collect();
+                
+                (frame, stft_output, dstft_output)
+            })
+            .collect();
+        
+        // Combine the results
+        for (frame, stft_output, dstft_output) in frame_results {
+            for i in 0..stft_output.len() {
+                Sx[[i, frame]] = stft_output[i];
+                dSx[[i, frame]] = dstft_output[i];
+            }
+        }
         
         // Compute STFT frequencies
-        let n_freqs = n_fft / 2 + 1;
         let Sfs = Array1::<f64>::linspace(0.0, 0.5 * fs, n_freqs);
         
         // Set gamma if not provided
         let gamma = gamma.unwrap_or_else(|| {
-            if Sx.is_standard_layout() {
-                10.0 * 2.2204460492503131e-16 // 10 * EPS64
-            } else {
-                10.0 * 1.1920929e-07 // 10 * EPS32
-            }
+            // Use epsilon based on data type
+            10.0 * 2.2204460492503131e-16 // 10 * EPS64
         });
         
         // Compute phase transform
         let w = phase_stft(&Sx, &dSx, &Sfs, gamma);
         
         // Compute frequencies for synchrosqueezed transform
-        let ssq_freqs = compute_associated_frequencies(n_freqs, fs, "float64");
+        let ssq_freqs = compute_associated_frequencies(n_freqs, fs);
         
         // Initialize synchrosqueezed STFT
-        let mut Tx = Array2::<Complex64>::zeros((n_freqs, Sx.shape()[1]));
+        let mut Tx = Array2::<Complex64>::zeros((n_freqs, n_frames));
         
         // Frequency bin size for constant in synchrosqueezing
         let dw = ssq_freqs[1] - ssq_freqs[0];
         
         // Synchrosqueezing
-        for j in 0..Sx.shape()[1] {
-            for i in 0..Sx.shape()[0] {
+        for j in 0..n_frames {
+            for i in 0..n_freqs {
                 if !w[[i, j]].is_infinite() {
                     // Find closest frequency bin
                     let mut k = 0;
@@ -163,7 +293,7 @@ pub fn ssq_stft<'py>(
                     // Apply synchrosqueezing
                     let weight = match squeezing {
                         "sum" => Sx[[i, j]],
-                        "lebesgue" => Complex64::new(1.0 / (Sx.shape()[0] as f64), 0.0),
+                        "lebesgue" => Complex64::new(1.0 / (n_freqs as f64), 0.0),
                         _ => Sx[[i, j]], // Default to sum
                     };
                     
@@ -184,57 +314,4 @@ pub fn ssq_stft<'py>(
     let py_Sfs = Sfs.into_pyarray(py).to_object(py);
     
     Ok((py_Tx, py_Sx, py_ssq_freqs, py_Sfs))
-}
-
-/// Compute derivative window (for phase transform)
-fn compute_diff_window(window: &ArrayView1<f64>) -> Array1<f64> {
-    use rustfft::{FftPlanner, num_complex::Complex as FFTComplex};
-    
-    let n = window.len();
-    let mut diff_window = Array1::<f64>::zeros(n);
-    
-    // Create frequency domain representation for computing derivative
-    let mut freqs = Array1::<f64>::zeros(n);
-    for i in 0..n/2 + 1 {
-        freqs[i] = i as f64;
-    }
-    for i in n/2 + 1..n {
-        freqs[i] = (i as f64) - (n as f64);
-    }
-    
-    // Scale by 2*pi/N for proper frequency domain differentiation
-    for i in 0..n {
-        freqs[i] *= 2.0 * std::f64::consts::PI / (n as f64);
-    }
-    
-    // Create a planner
-    let mut planner = FftPlanner::new();
-    let fft_forward = planner.plan_fft_forward(n);
-    let fft_inverse = planner.plan_fft_inverse(n);
-    
-    // Convert window to complex and FFT it
-    let mut window_complex: Vec<FFTComplex<f64>> = window
-        .iter()
-        .map(|&w| FFTComplex::new(w, 0.0))
-        .collect();
-    
-    fft_forward.process(&mut window_complex);
-    
-    // Multiply by i*omega in frequency domain
-    for i in 0..n {
-        let re = window_complex[i].re;
-        let im = window_complex[i].im;
-        window_complex[i] = FFTComplex::new(-im * freqs[i], re * freqs[i]);
-    }
-    
-    // Perform inverse FFT
-    fft_inverse.process(&mut window_complex);
-    
-    // Normalize and convert back to real
-    let scale = 1.0 / (n as f64);
-    for i in 0..n {
-        diff_window[i] = window_complex[i].re * scale;
-    }
-    
-    diff_window
 }

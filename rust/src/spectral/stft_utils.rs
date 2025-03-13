@@ -172,15 +172,18 @@ pub fn compute_diff_window(window: &ArrayView1<f64>) -> Array1<f64> {
     diff_window
 }
 
-/// Compute the derivative of the STFT
+// Change the stft_derivative function to accept owned Array1 for diff_window
 pub fn stft_derivative(
     padded_x: &Array1<f64>,
     n_fft: usize,
     hop_length: usize,
     window: &ArrayView1<f64>,
-    diff_window: &ArrayView1<f64>,
+    diff_window: &Array1<f64>,  // Changed from &ArrayView1<f64> to &Array1<f64>
     fs: f64,
 ) -> ndarray::Array2<Complex64> {
+    // Get a view of the diff_window for consistent interface
+    let diff_window_view = diff_window.view();
+    
     // Similar to stft but using the derivative of the window
     let n_samples = padded_x.len();
     let n_frames = ((n_samples - n_fft) / hop_length) + 1;
@@ -200,7 +203,7 @@ pub fn stft_derivative(
             let fft = planner.plan_fft_forward(n_fft);
             
             // Apply derivative window
-            let mut windowed_frame = apply_window(&frame_slice, &diff_window);
+            let mut windowed_frame = apply_window(&frame_slice, &diff_window_view);
             
             // Scale by sampling frequency
             for i in 0..windowed_frame.len() {
