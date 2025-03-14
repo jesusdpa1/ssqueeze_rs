@@ -489,7 +489,7 @@ fn generate_log_scales(N: usize, nv: usize, wavelet: &str) -> PyResult<Array1<f6
 }
 
 /// Generate wavelets efficiently in Fourier domain
-fn generate_wavelet_fourier(xi: &Array1<f64>, scale: f64, wavelet_type: &str) -> Array1<Complex64> {
+pub fn generate_wavelet_fourier(xi: &Array1<f64>, scale: f64, wavelet_type: &str) -> Array1<Complex64> {
     let N = xi.len();
     let mut psih = Array1::<Complex64>::zeros(N);
     
