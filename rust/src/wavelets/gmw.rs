@@ -6,9 +6,6 @@ use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 use std::f64::consts::PI;
 use super::base::{WaveletBase, xifn};
-use rayon::prelude::*;
-use std::sync::Arc;
-use num_traits::FloatConst;
 
 /// Generalized Morse Wavelet implementation
 pub struct GMW {
@@ -183,7 +180,7 @@ fn gamma_function(x: f64) -> f64 {
             1.5056327351493116e-7
         ];
         
-        let mut x = x - 1.0;
+        let x = x - 1.0;
         let mut y = 0.99999999999980993;
         for i in 0..p.len() {
             y += p[i] / (x + (i as f64) + 1.0);
@@ -220,16 +217,17 @@ fn binomial_coefficient(n: i32, k: i32) -> f64 {
     // Use logarithms for larger values to avoid overflow
     let mut c = 0.0;
     for i in 1..=k {
-        c += (n - k + i).ln() - i.ln();
+        c += ((n - k + i) as f64).ln() - (i as f64).ln();
     }
     c.exp()
 }
 
 /// Python interface for GMW wavelet
 #[pyfunction]
-#[pyo3(signature = (gamma=3.0, beta=60.0, norm="bandpass", order=0, dtype="float64"))]
-pub fn gmw<'py>(
-    py: Python<'py>,
+#[pyo3(signature = (w, gamma=3.0, beta=60.0, norm="bandpass", order=0, dtype="float64"))]
+pub fn gmw(
+    py: Python<'_>,
+    w: PyReadonlyArray1<f64>,
     gamma: f64,
     beta: f64,
     norm: &str,
@@ -247,22 +245,15 @@ pub fn gmw<'py>(
         return Err(PyValueError::new_err("order must be non-negative"));
     }
     
-    // Create the closure that computes the GMW wavelet
-    let gmw_fn = move |w: PyReadonlyArray1<f64>| -> PyResult<PyObject> {
-        let w_array = w.as_array();
-        
-        // Create the GMW wavelet
-        let wavelet = GMW::new(gamma, beta, norm.to_string(), order, dtype.to_string());
-        
-        // Compute the wavelet
-        let result = wavelet.psih(&w_array);
-        
-        // Convert to Python
-        Ok(result.into_pyarray(py).to_object(py))
-    };
+    // Create the wavelet
+    let wavelet = GMW::new(gamma, beta, norm.to_string(), order, dtype.to_string());
     
-    // Return the closure as a Python callable
-    Ok(PyO3::wrap_pyfunction!(gmw_fn)(py))
+    // Compute the wavelet
+    let w_array = w.as_array();
+    let result = wavelet.psih(&w_array);
+    
+    // Convert to Python
+    Ok(result.into_pyarray(py).into_py(py))
 }
 
 /// Compute the GMW wavelet in frequency domain
@@ -288,7 +279,7 @@ pub fn gmw_freq<'py>(
     let result = wavelet.psih(&xi.view());
     
     // Convert to Python
-    Ok(result.into_pyarray(py).to_object(py))
+    Ok(result.into_pyarray(py).into_py(py))
 }
 
 /// Compute the GMW wavelet in time domain via inverse FFT
@@ -338,7 +329,7 @@ pub fn gmw_time<'py>(
     );
     
     // Convert to Python
-    Ok(psi.into_pyarray(py).to_object(py))
+    Ok(psi.into_pyarray(py).into_py(py))
 }
 
 /// Calculate GMW wavelet center frequency

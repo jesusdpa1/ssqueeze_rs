@@ -1,16 +1,17 @@
 // rust/src/wavelets/base.rs
 use ndarray::{Array1, ArrayView1};
 use num_complex::Complex64;
-use numpy::{IntoPyArray, PyReadonlyArray1};
+use numpy::IntoPyArray;
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::types::PyDict;
 use std::f64::consts::PI;
 
 /// Generate frequency-domain grid for wavelet computation
 /// 
 /// # Arguments
-/// * `n` - Length of the wavelet
 /// * `scale` - Scale parameter
+/// * `n` - Length of the wavelet
 /// 
 /// # Returns
 /// * `xi` - Frequency-domain grid
@@ -78,16 +79,16 @@ pub fn get_dtype_from_str(dtype_str: &str) -> Result<&'static str, PyErr> {
 pub fn process_wavelet_params<'py>(
     py: Python<'py>,
     wavelet_type: &str,
-    params: &PyAny,
+    params: &Bound<'py, PyAny>,
 ) -> PyResult<PyObject> {
     // Extract parameters from Python dict
-    let params_dict = params.extract::<pyo3::types::PyDict>()?;
+    let params_dict = params.downcast::<PyDict>()?;
     
     // Return processed parameters as Python dict
-    let result = pyo3::types::PyDict::new(py);
+    let result = PyDict::new(py);
     
     // Common parameters for all wavelets
-    if let Some(dtype) = params_dict.get_item("dtype") {
+    if let Some(dtype) = params_dict.get_item("dtype")? {
         result.set_item("dtype", dtype)?;
     } else {
         // Default dtype
@@ -98,7 +99,7 @@ pub fn process_wavelet_params<'py>(
     match wavelet_type {
         "morlet" => {
             // Default mu value
-            let mu = if let Some(mu_val) = params_dict.get_item("mu") {
+            let mu = if let Some(mu_val) = params_dict.get_item("mu")? {
                 mu_val.extract::<f64>()?
             } else {
                 6.0
@@ -107,22 +108,22 @@ pub fn process_wavelet_params<'py>(
         },
         "gmw" => {
             // Default GMW parameters
-            let gamma = if let Some(gamma_val) = params_dict.get_item("gamma") {
+            let gamma = if let Some(gamma_val) = params_dict.get_item("gamma")? {
                 gamma_val.extract::<f64>()?
             } else {
                 3.0
             };
-            let beta = if let Some(beta_val) = params_dict.get_item("beta") {
+            let beta = if let Some(beta_val) = params_dict.get_item("beta")? {
                 beta_val.extract::<f64>()?
             } else {
                 60.0
             };
-            let norm = if let Some(norm_val) = params_dict.get_item("norm") {
+            let norm = if let Some(norm_val) = params_dict.get_item("norm")? {
                 norm_val.extract::<String>()?
             } else {
                 "bandpass".to_string()
             };
-            let order = if let Some(order_val) = params_dict.get_item("order") {
+            let order = if let Some(order_val) = params_dict.get_item("order")? {
                 order_val.extract::<i32>()?
             } else {
                 0
@@ -135,12 +136,12 @@ pub fn process_wavelet_params<'py>(
         },
         "bump" => {
             // Default bump parameters
-            let mu = if let Some(mu_val) = params_dict.get_item("mu") {
+            let mu = if let Some(mu_val) = params_dict.get_item("mu")? {
                 mu_val.extract::<f64>()?
             } else {
                 5.0
             };
-            let sigma = if let Some(sigma_val) = params_dict.get_item("sigma") {
+            let sigma = if let Some(sigma_val) = params_dict.get_item("sigma")? {
                 sigma_val.extract::<f64>()?
             } else {
                 1.0
@@ -154,7 +155,7 @@ pub fn process_wavelet_params<'py>(
         }
     }
     
-    Ok(result.into())
+    Ok(result.into_py(py))
 }
 
 /// Helper function to convert between various norm types

@@ -54,30 +54,25 @@ impl WaveletBase for Morlet {
     }
 }
 
-/// Python interface for Morlet wavelet
+// Simple Morlet wrapper for Python
+
 #[pyfunction]
-#[pyo3(signature = (mu=6.0, dtype="float64"))]
-pub fn morlet<'py>(
-    py: Python<'py>,
+#[pyo3(signature = (w, mu=6.0, dtype="float64"))]
+pub fn morlet(
+    py: Python<'_>,
+    w: PyReadonlyArray1<f64>,
     mu: f64,
     dtype: &str,
 ) -> PyResult<PyObject> {
-    // Create the closure that computes the Morlet wavelet
-    let morlet_fn = move |w: PyReadonlyArray1<f64>| -> PyResult<PyObject> {
-        let w_array = w.as_array();
-        
-        // Create the Morlet wavelet
-        let wavelet = Morlet::new(mu, dtype.to_string());
-        
-        // Compute the wavelet
-        let result = wavelet.psih(&w_array);
-        
-        // Convert to Python
-        Ok(result.into_pyarray(py).to_object(py))
-    };
+    // Create the Morlet wavelet
+    let wavelet = Morlet::new(mu, dtype.to_string());
     
-    // Return the closure as a Python callable
-    Ok(PyO3::wrap_pyfunction!(morlet_fn)(py))
+    // Compute the wavelet
+    let w_array = w.as_array();
+    let result = wavelet.psih(&w_array);
+    
+    // Convert to Python
+    Ok(result.into_pyarray(py).into_py(py))
 }
 
 /// Compute the Morlet wavelet in frequency domain
@@ -100,7 +95,7 @@ pub fn morlet_freq<'py>(
     let result = wavelet.psih(&xi.view());
     
     // Convert to Python
-    Ok(result.into_pyarray(py).to_object(py))
+    Ok(result.into_pyarray(py).into_py(py))
 }
 
 /// Compute the Morlet wavelet in time domain via inverse FFT
@@ -147,5 +142,5 @@ pub fn morlet_time<'py>(
     );
     
     // Convert to Python
-    Ok(psi.into_pyarray(py).to_object(py))
+    Ok(psi.into_pyarray(py).into_py(py))
 }

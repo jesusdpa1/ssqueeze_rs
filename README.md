@@ -30,7 +30,6 @@ This project is a Rust-backed reimplementation of [ssqueezepy](https://github.co
   - SIMD optimizations
   - Zero-copy data transfer
 - **Performance Goals**: 
-  - Faster than MATLAB implementations
   - Memory-efficient large dataset handling
 - **Development Tools**:
   - `uv` for dependency management
