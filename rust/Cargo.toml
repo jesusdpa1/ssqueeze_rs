@@ -3,6 +3,10 @@ name = "ssqueeze_rs"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.maturin]
+python-source = "python"  # Only needed if you have Python files
+features = ["pyo3/extension-module"]
+
 [lib]
 name = "_rs"
 # "cdylib" is necessary to produce a shared library for Python to import from.
