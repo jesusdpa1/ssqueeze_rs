@@ -12,6 +12,23 @@ def stft(
     x: np.ndarray, n_fft: int, hop_length: int, window: np.ndarray, padtype: str
 ) -> Tuple[np.ndarray, np.ndarray]: ...
 @overload
+def cwt_simd(
+    x: np.ndarray,
+    wavelet: str = "gmw",
+    scales: Optional[np.ndarray] = None,
+    fs: Optional[float] = None,
+    t: Optional[np.ndarray] = None,
+    nv: int = 32,
+    l1_norm: bool = True,
+    derivative: bool = False,
+    padtype: str = "reflect",
+    rpadded: bool = False,
+    vectorized: bool = True,
+    patience: int = 0,
+) -> Union[
+    Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray, np.ndarray]
+]: ...
+@overload
 def cwt(
     x: np.ndarray,
     wavelet: str = "gmw",

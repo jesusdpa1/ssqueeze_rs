@@ -10,6 +10,7 @@ mod ridge;
 use spectral::stft::stft;
 use spectral::ssq_stft::ssq_stft;
 use spectral::cwt::cwt;
+use spectral::cwt_simd::cwt_simd;
 
 #[pyfunction]
 fn hello_from_bin() -> String {
@@ -26,6 +27,7 @@ fn _rs(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(stft, py)?)?;
     m.add_function(wrap_pyfunction!(ssq_stft, py)?)?;
     m.add_function(wrap_pyfunction!(cwt, py)?)?;
+    m.add_function(wrap_pyfunction!(cwt_simd, py)?)?;
     
     Ok(())
 }

@@ -1,4 +1,4 @@
-# Example showing how to use this with the same pattern as the provided code
+# Example showing how to use cwt_simd with the same pattern as the provided code
 # %%
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
@@ -14,7 +14,7 @@ from ssqueeze import _rs
 
 
 # %%
-def test_rust_cwt():
+def test_rust_cwt_simd():
     # Create a simple test signal
     fs = 1000  # 1 kHz sampling rate
     t = np.linspace(0, 1, fs, endpoint=False)  # 1 second
@@ -28,10 +28,10 @@ def test_rust_cwt():
     num_scales = 32
     scales = np.logspace(1, 5, num_scales) / fs
 
-    # Call the Rust CWT function
+    # Call the Rust CWT SIMD function
     try:
-        print("Calling Rust CWT function...")
-        Wx, scales_out, dWx = _rs.cwt(
+        print("Calling Rust CWT SIMD function...")
+        Wx, scales_out, dWx = _rs.cwt_simd(
             x,
             wavelet=wavelet,
             scales=scales,
@@ -59,14 +59,14 @@ def test_rust_cwt():
         if dWx is not None and dWx.shape == Wx.shape:
             print("Derivative has correct shape")
 
-        print("CWT test successful!")
+        print("CWT SIMD test successful!")
         return True
     except Exception as e:
-        print(f"Error testing Rust CWT: {e}")
+        print(f"Error testing Rust CWT SIMD: {e}")
         return False
 
 
-def process_cwt(
+def process_cwt_simd(
     data: da.Array,
     fs: float = None,
     wavelet: str = "gmw",
@@ -77,7 +77,7 @@ def process_cwt(
     **kwargs,
 ) -> da.Array:
     """
-    Process data with Rust-based CWT implementation
+    Process data with Rust-based CWT SIMD implementation
 
     Parameters:
     -----------
@@ -133,10 +133,10 @@ def process_cwt(
             # Extract channel data and ensure it's the right type
             channel_data = np.asarray(x[:, ch], dtype=np.float64)
 
-            # Call Rust CWT function
+            # Call Rust CWT SIMD function
             try:
                 if derivative:
-                    cwt_result, scales_out, dWx = _rs.cwt(
+                    cwt_result, scales_out, dWx = _rs.cwt_simd(
                         channel_data,
                         wavelet=wavelet,
                         scales=scales,
@@ -149,7 +149,7 @@ def process_cwt(
                     # Add to results (ignoring derivative for now)
                     results.append(cwt_result)
                 else:
-                    cwt_result, scales_out = _rs.cwt(
+                    cwt_result, scales_out = _rs.cwt_simd(
                         channel_data,
                         wavelet=wavelet,
                         scales=scales,
@@ -325,7 +325,8 @@ def plot_cwt_spectrogram(
 
 
 # %%
-test_rust_cwt()
+# Test the SIMD implementation
+test_rust_cwt_simd()
 
 # %%
 # Path to your data
@@ -341,13 +342,52 @@ fs = 24414.0625
 with pa.memory_map(str(parquet_path), "r") as mmap:
     table = pq.read_table(mmap)
     data_array = table.to_pandas().values
-    data_ = da.from_array(data_array, chunks=(1000, -1))
+    data_ = da.from_array(data_array, chunks=(1000000, -1))
+
 # %%
-# Process with CWT
-result = process_cwt(data_[:1000000, :], fs=fs, wavelet="gmw", nv=32)
-a = result.compute()
+# Process with CWT SIMD
+result_simd = process_cwt_simd(data_[:1000000, :], fs=fs, wavelet="morlet", nv=16)
+# a_simd = result_simd.compute()
+
 # %%
 # Plot the result
-plot_cwt_spectrogram(result, fs=fs, channel_idx=1, duration=1)
+plot_cwt_spectrogram(result_simd, fs=fs, channel_idx=1, duration=1)
+
+# %%
+# Optional: Compare performance between cwt and cwt_simd
+import time
+
+# Define a small test case
+test_data = data_[:100000, 0]  # Take only 100k samples from first channel
+test_data_array = np.asarray(test_data.compute(), dtype=np.float64)
+
+# Time the standard cwt
+start_time = time.time()
+Wx_std = _rs.cwt(
+    test_data_array,
+    wavelet="morlet",
+    fs=fs,
+    nv=16,
+    derivative=True,
+)
+std_time = time.time() - start_time
+print(f"Standard CWT execution time: {std_time:.4f} seconds")
+
+# Time the SIMD cwt
+start_time = time.time()
+Wx_simd = _rs.cwt_simd(
+    test_data_array,
+    wavelet="morlet",
+    fs=fs,
+    nv=16,
+    derivative=True,
+)
+simd_time = time.time() - start_time
+print(f"SIMD CWT execution time: {simd_time:.4f} seconds")
+print(f"Speedup: {std_time / simd_time:.2f}x")
+
+# Check results are similar
+difference = np.max(np.abs(Wx_std[0] - Wx_simd[0]))
+print(f"Maximum absolute difference between results: {difference}")
 
 # %%
