@@ -13,6 +13,7 @@ name = "_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
+cudarc = "0.13.9"
 ndarray = { version = "0.16.1", features = ["rayon"] }
 ndarray-stats = "0.6.0"
 num = "0.4.3"
