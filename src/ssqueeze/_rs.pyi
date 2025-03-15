@@ -8,8 +8,21 @@ import numpy as np
 
 def hello_from_bin() -> str: ...
 @overload
-def stft(
-    x: np.ndarray, n_fft: int, hop_length: int, window: np.ndarray, padtype: str
+def ssq_cwt(
+    x: np.ndarray,
+    wavelet: str = "gmw",
+    scales: Optional[np.ndarray] = None,
+    fs: Optional[float] = None,
+    t: Optional[np.ndarray] = None,
+    ssq_freqs: Optional[str] = None,
+    nv: int = 32,
+    padtype: str = "reflect",
+    squeezing: str = "sum",
+    maprange: str = "peak",
+    difftype: str = "trig",
+    gamma: Optional[float] = None,
+    vectorized: bool = True,
+    flipud: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]: ...
 @overload
 def cwt_simd(
@@ -58,6 +71,10 @@ def icwt(
     rpadded: bool = False,
     l1_norm: bool = True,
 ) -> np.ndarray: ...
+@overload
+def stft(
+    x: np.ndarray, n_fft: int, hop_length: int, window: np.ndarray, padtype: str
+) -> Tuple[np.ndarray, np.ndarray]: ...
 @overload
 def ssq_stft(
     x: np.ndarray,

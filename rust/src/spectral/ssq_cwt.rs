@@ -237,16 +237,10 @@ fn ssqueeze(
 /// * `difftype` - Differentiation type ('trig', 'phase', 'numeric')
 /// * `gamma` - CWT phase threshold
 /// * `flipud` - Flip frequency axis
-/// * `get_w` - Whether to return the phase transform
-/// * `get_dWx` - Whether to return the derivative of the CWT
 /// 
 /// # Returns
 /// * `Tx` - Synchrosqueezed CWT of x
-/// * `Wx` - Continuous Wavelet Transform of x
 /// * `ssq_freqs` - Frequencies associated with rows of Tx
-/// * `scales` - Scales associated with rows of Wx
-/// * `w` - Phase transform (optional)
-/// * `dWx` - Time-derivative of the CWT (optional)
 #[pyfunction]
 #[pyo3(signature = (
     x, 
@@ -262,9 +256,7 @@ fn ssqueeze(
     difftype="trig", 
     gamma=None, 
     vectorized=true,
-    flipud=true,
-    get_w=false,
-    get_dWx=false
+    flipud=true
 ))]
 pub fn ssq_cwt<'py>(
     py: Python<'py>,
@@ -281,10 +273,8 @@ pub fn ssq_cwt<'py>(
     difftype: &str,
     gamma: Option<f64>,
     vectorized: bool,
-    flipud: bool,
-    get_w: bool, 
-    get_dWx: bool
-) -> PyResult<(PyObject, PyObject, PyObject, PyObject, Option<PyObject>, Option<PyObject>)> {
+    flipud: bool
+) -> PyResult<(PyObject, PyObject)> {
     // Convert Python arrays to Rust arrays
     let x_array = x.as_array().to_owned();
     let N = x_array.len();
@@ -489,29 +479,15 @@ pub fn ssq_cwt<'py>(
             flipud
         );
         
-        (Tx, Wx_unpadded, ssq_freqs_array, scales_array, w, dWx_unpadded)
+        (Tx, ssq_freqs_array)
     });
     
     // Convert results to Python objects
-    let (Tx, Wx, ssq_freqs, scales, w, dWx) = result;
+    let (Tx, ssq_freqs) = result;
     
     // Using IntoPy trait instead of deprecated to_object method
     let py_Tx = Tx.into_pyarray(py).into_py(py);
-    let py_Wx = Wx.into_pyarray(py).into_py(py);
     let py_ssq_freqs = ssq_freqs.into_pyarray(py).into_py(py);
-    let py_scales = scales.into_pyarray(py).into_py(py);
     
-    let py_w = if get_w {
-        Some(w.into_pyarray(py).into_py(py))
-    } else {
-        None
-    };
-    
-    let py_dWx = if get_dWx {
-        Some(dWx.into_pyarray(py).into_py(py))
-    } else {
-        None
-    };
-    
-    Ok((py_Tx, py_Wx, py_ssq_freqs, py_scales, py_w, py_dWx))
+    Ok((py_Tx, py_ssq_freqs))
 }
